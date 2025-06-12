@@ -20,6 +20,7 @@ import nextflow.validation.samplesheet.SamplesheetConverter
 import nextflow.validation.summary.SummaryCreator
 import nextflow.validation.parameters.ParameterValidator
 import nextflow.validation.validators.JsonSchemaValidator
+import nextflow.validation.utils.AssetsHelper
 import static nextflow.validation.utils.Colors.getLogColors
 import static nextflow.validation.utils.Common.getBasePath
 import static nextflow.validation.utils.Common.getLongestKeyLength
@@ -39,6 +40,10 @@ class ValidationExtension extends PluginExtensionPoint {
     // The session
     private Session session
 
+    // assets helper
+    private AssetsHelper assetsHelper
+    private Map<String, String> schemaFiles
+
     @Override
     protected void init(Session session) {
         this.session = session
@@ -46,7 +51,12 @@ class ValidationExtension extends PluginExtensionPoint {
         // Help message logic
         def Map params = (Map)session.params ?: [:]
         config = new ValidationConfig(session?.config?.navigate('validation') as Map, params)
-
+        assetsHelper = new AssetsHelper(
+            session.baseDir.toString(), 
+            config.parametersSchema, 
+            config.monochromeLogs
+        )
+        schemaFiles = assetsHelper.discoverSchemaFiles()
     }
 
     @Function
@@ -234,6 +244,36 @@ Please contact the pipeline maintainer(s) if you see this warning as a user.
         output += "-${colors.dim}----------------------------------------------------${colors.reset}-"
         output += config.summary.afterText
         return output
+    }
+
+    /*
+    * Function to parse a parameter that is associated with a schema in the main schema file,
+    * retrieve the schema, and call samplesheetToList on it
+    */
+    @Function
+    public List parseParam(
+        String paramKey,
+        Map options = null
+    ) {
+        
+        // Check if the parameter has an associated schema
+        if (!schemaFiles.containsKey(paramKey)) {
+            def colors = getLogColors(config.monochromeLogs)
+            def String msg = "${colors.red}Parameter '${paramKey}' not found in schema or has no associated samplesheet schema${colors.reset}"
+            throw new SchemaValidationException(msg)
+        }
+        
+        // Get the parameter value from session params
+        def Object paramValue = session.params[paramKey]
+        if (!paramValue) {
+            def colors = getLogColors(config.monochromeLogs)
+            def String msg = "${colors.red}Parameter '${paramKey}' not found in pipeline parameters${colors.reset}"
+            throw new SchemaValidationException(msg)
+        }
+        
+        // Get the schema path and call samplesheetToList
+        def String schemaPath = schemaFiles[paramKey]
+        return samplesheetToList(paramValue as CharSequence, schemaPath as CharSequence, options)
     }
 
     private Map flattenNestedParamsMap(Map paramsMap) {
